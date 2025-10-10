@@ -1,117 +1,124 @@
 # .github/workflows/build.yml
 
-name: Build Termux FFmpeg with fdk-aac
+name: Build FFmpeg for Termux
 
 on:
-  # 允许手动从 GitHub Actions 页面触发此工作流
+  # 允许您从 GitHub Actions 页面手动触发此工作流
   workflow_dispatch:
 
-  # （可选）在每周一的 UTC 时间 02:00 自动运行
+  # 设置定时任务，例如每周一凌晨3点 (UTC) 运行一次
   schedule:
-    - cron: '0 2 * * 1'
-
-  # （可选）当 automation 分支有新的推送时运行，方便测试工作流本身
-  push:
-    branches:
-      - automation
+    - cron: '0 3 * * 1'
 
 jobs:
   build:
     runs-on: ubuntu-latest
-    
-    # 授予创建 Release 的权限
     permissions:
+      # 需要写入权限来创建和上传 GitHub Release
       contents: write
 
     steps:
-      - name: Checkout the source branch for building
+      - name: Checkout 'source' branch for building
         uses: actions/checkout@v4
         with:
-          # 明确指定拉取 source 分支
-          ref: source
-          # 将代码检出到 termux-packages 子目录中
-          path: termux-packages
+          # 从您的仓库中拉取 source 分支的代码
+          repository: ${{ github.repository }}
+          ref: 'source'
+          # 将代码检出到名为 'termux-packages' 的子目录中
+          path: 'termux-packages'
 
-      - name: Set up build environment (Ubuntu)
+      - name: Setup Termux Build Environment
         working-directory: ./termux-packages
         run: |
-          sudo apt-get update
+          # 运行官方的设置脚本
+          sudo apt-get update -y
           ./scripts/setup-ubuntu.sh
+          ./scripts/setup-android-sdk.sh
 
-      - name: Cache Android SDK
-        id: cache-sdk
-        uses: actions/cache@v4
-        with:
-          path: ~/android-sdk
-          key: ${{ runner.os }}-android-sdk-${{ hashFiles('termux-packages/scripts/setup-android-sdk.sh') }}
-
-      - name: Set up Android SDK
-        # 只有在缓存未命中时才运行安装
-        if: steps.cache-sdk.outputs.cache-hit != 'true'
-        working-directory: ./termux-packages
-        run: ./scripts/setup-android-sdk.sh
-
-      - name: Modify ffmpeg build.sh for fdk-aac
+      - name: Patch ffmpeg build.sh for libfdk-aac
         working-directory: ./termux-packages
         run: |
-          FFMPEG_BUILD_SCRIPT="./packages/ffmpeg/build.sh"
-          echo ">>> Modifying ${FFMPEG_BUILD_SCRIPT} to enable libfdk-aac..."
+          # 定义要修改的 build.sh 文件路径
+          FFMPEG_BUILD_SH="packages/ffmpeg/build.sh"
+          echo "--- Modifying ${FFMPEG_BUILD_SH} ---"
 
-          # 1. 在 TERMUX_PKG_DEPENDS 中添加 libfdk-aac
-          #    使用 sed 在依赖列表的末尾双引号前添加 ", libfdk-aac"
-          #    这假设原字符串以 " 结尾
-          sed -i 's/"$/, libfdk-aac"/' "${FFMPEG_BUILD_SCRIPT}"
-          echo "Added 'libfdk-aac' to TERMUX_PKG_DEPENDS."
+          # 1. 在 TERMUX_PKG_DEPENDS 变量末尾添加 libfdk-aac
+          #    使用 sed 找到以 TERMUX_PKG_DEPENDS= 开头的行，并在末尾的引号前添加依赖
+          echo "Adding 'libfdk-aac' to TERMUX_PKG_DEPENDS..."
+          sed -i '/^TERMUX_PKG_DEPENDS=/ s/"$/, libfdk-aac"/' "$FFMPEG_BUILD_SH"
 
-          # 2. 将 --disable-libfdk-aac 替换为 --enable-libfdk-aac 和 --enable-nonfree
-          #    根据 termux-packages 的 build.sh 脚本，--disable-libfdk-aac 几乎总是存在
-          sed -i 's/--disable-libfdk-aac/--enable-libfdk-aac --enable-nonfree/' "${FFMPEG_BUILD_SCRIPT}"
-          echo "Replaced '--disable-libfdk-aac' with '--enable-libfdk-aac --enable-nonfree'."
-
-          echo ">>> Patched ffmpeg build script:"
-          grep -C 3 "libfdk-aac" "${FFMPEG_BUILD_SCRIPT}"
+          # 2. 修改 ./configure 参数
+          #    检查是否存在 --disable-libfdk-aac
+          if grep -q -- '--disable-libfdk-aac' "$FFMPEG_BUILD_SH"; then
+            echo "Found '--disable-libfdk-aac', replacing it..."
+            # 如果存在，则将其替换为 --enable-libfdk-aac 和 --enable-nonfree
+            # 's|old|new|' 格式可以避免路径中的斜杠问题，这里用 | 作为分隔符
+            sed -i 's|--disable-libfdk-aac|--enable-libfdk-aac \\\n\t\t--enable-nonfree|' "$FFMPEG_BUILD_SH"
+          else
+            echo "'--disable-libfdk-aac' not found, appending new flags..."
+            # 如果不存在，则在 './configure' 参数列表的末尾（通常是某个已知标志之后）追加
+            # 我们选择在 '--disable-vulkan \' 这一行之后追加新行
+            sed -i '/--disable-vulkan/a \ \ \ \ \ \ \ \ --enable-libfdk-aac \\\n\ \ \ \ \ \ \ \ --enable-nonfree \\' "$FFMPEG_BUILD_SH"
+          fi
+          
+          echo "--- Patched file content: ---"
+          grep -C 5 "libfdk-aac" "$FFMPEG_BUILD_SH"
+          echo "---------------------------"
 
       - name: Build ffmpeg package
         working-directory: ./termux-packages
         run: |
-          # -a aarch64: 指定目标架构
-          # -i: 从官方源下载并安装预编译的依赖，大大加快CI构建速度
+          # 开始编译，-a aarch64 指定了目标平台
+          # -i 参数会下载预编译的依赖，大大加快编译速度
           ./build-package.sh -a aarch64 -i ffmpeg
 
-      - name: Prepare release assets
-        id: prepare-release
+      - name: Prepare Release Assets
+        id: prep
+        working-directory: ./termux-packages
         run: |
-          # 从 build.sh 中提取版本号
-          VERSION=$(grep 'TERMUX_PKG_VERSION=' termux-packages/packages/ffmpeg/build.sh | cut -d'=' -f2)
+          # 从 build.sh 中提取版本和修订号
+          VERSION=$(grep 'TERMUX_PKG_VERSION=' packages/ffmpeg/build.sh | cut -d'=' -f2)
+          REVISION=$(grep 'TERMUX_PKG_REVISION=' packages/ffmpeg/build.sh | cut -d'=' -f2)
+          
           # 获取当前日期
-          DATE=$(date +%Y%m%d)
-
-          # 设置 Release 的 tag 和 title
-          TAG_NAME="ffmpeg-${VERSION}-${DATE}"
-          RELEASE_TITLE="FFmpeg ${VERSION} (built on ${DATE})"
+          DATE=$(date +%Y.%m.%d)
           
-          echo "version=${VERSION}" >> $GITHUB_OUTPUT
-          echo "tag=${TAG_NAME}" >> $GITHUB_OUTPUT
-          echo "title=${RELEASE_TITLE}" >> $GITHUB_OUTPUT
-          
-          # 找出编译好的 .deb 文件
-          DEB_FILE=$(find termux-packages/output -name "ffmpeg_*_aarch64.deb")
-          echo "deb_path=${DEB_FILE}" >> $GITHUB_OUTPUT
+          # 设置 Release 的 Tag 和标题
+          TAG_NAME="ffmpeg-v${VERSION}-${REVISION}-${DATE}"
+          RELEASE_TITLE="FFmpeg v${VERSION}-${REVISION} (${DATE})"
           
           echo "Release Tag: ${TAG_NAME}"
           echo "Release Title: ${RELEASE_TITLE}"
-          echo "Artifact Path: ${DEB_FILE}"
+          
+          # 找到编译生成的 .deb 文件
+          DEB_FILE=$(find output -name "ffmpeg*.deb")
+          if [ -z "$DEB_FILE" ]; then
+            echo "::error::Build failed, FFmpeg .deb file not found."
+            exit 1
+          fi
+          
+          # 将变量输出，供后续步骤使用
+          echo "tag=${TAG_NAME}" >> $GITHUB_OUTPUT
+          echo "title=${RELEASE_TITLE}" >> $GITHUB_OUTPUT
+          echo "deb_path=${DEB_FILE}" >> $GITHUB_OUTPUT
+          echo "deb_name=$(basename "${DEB_FILE}")" >> $GITHUB_OUTPUT
 
-      - name: Create GitHub Release and Upload Artifact
+      - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          # 使用上一步生成的 tag 和 title
-          tag_name: ${{ steps.prepare-release.outputs.tag }}
-          name: ${{ steps.prepare-release.outputs.title }}
+          # 使用上一步生成的 Tag 和标题
+          tag_name: ${{ steps.prep.outputs.tag }}
+          name: ${{ steps.prep.outputs.title }}
+          
+          # Release 的描述内容
           body: |
-            Automated FFmpeg build for Termux (aarch64) with libfdk-aac support enabled.
+            Automated build of FFmpeg for Termux (aarch64).
+            - Based on termux/termux-packages `source` branch.
+            - Enabled `libfdk-aac` (non-free).
+
+          # 要上传的文件列表
+          files: |
+            ./termux-packages/${{ steps.prep.outputs.deb_path }}
             
-            - **FFmpeg Version:** `${{ steps.prepare-release.outputs.version }}`
-            - **Source:** Based on `termux/termux-packages` `source` branch.
-          # 指定要上传的文件
-          files: ${{ steps.prepare-release.outputs.deb_path }}
+          # 如果找不到文件则失败
+          fail_on_unmatched_files: true
