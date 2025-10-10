@@ -62,10 +62,9 @@ jobs:
             echo "has_update=true" >> $GITHUB_OUTPUT
           fi
 
-      # 步骤 5: 如果有更新，则硬重置分支并强制推送
-      # 这个步骤只有在 check_update 步骤的输出 has_update 为 'true' 时才会运行
+      # 步骤 5: 无视是否有更新，硬重置分支并强制推送
       - name: 'Hard reset and force push'
-        if: steps.check_update.outputs.has_update == 'true'
+        # if: steps.check_update.outputs.has_update == 'true'
         run: |
           echo "Resetting 'source' branch to 'upstream/master'..."
           git reset --hard upstream/master
