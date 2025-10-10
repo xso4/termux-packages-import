@@ -1,0 +1,85 @@
+# .github/workflows/auto.yml
+# 此工作流用于定期从上游仓库 termux/termux-packages 同步更新
+# 并触发构建工作流
+
+name: 'Auto: Sync with Upstream and Trigger Build'
+
+on:
+  # 允许您在 Actions 页面手动触发此工作流
+  workflow_dispatch:
+
+  # 定时任务，使用 Cron 语法
+  # 此处设置为每 6 小时运行一次。您可以根据需要修改。
+  # '0 */6 * * *' = 在每6小时的第0分钟运行 (00:00, 06:00, 12:00, 18:00 UTC)
+  schedule:
+    - cron: '0 */6 * * *'
+
+jobs:
+  sync_and_trigger:
+    runs-on: ubuntu-latest
+    steps:
+      # 步骤 1: 检出你的仓库的 source 分支
+      # fetch-depth: 0 是必须的，它会获取所有的历史记录，以便进行比较和重置
+      - name: 'Checkout source branch'
+        uses: actions/checkout@v4
+        with:
+          ref: 'source'
+          # 使用 PAT 以便后续步骤有权限触发其他工作流
+          # 你需要在仓库的 Secrets 中创建一个名为 PAT_TOKEN 的密钥
+          token: ${{ secrets.PAT_TOKEN }}
+          fetch-depth: 0
+
+      # 步骤 2: 配置 Git 用户信息
+      - name: 'Set up Git'
+        run: |
+          git config --global user.name 'github-actions[bot]'
+          git config --global user.email 'github-actions[bot]@users.noreply.github.com'
+
+      # 步骤 3: 添加上游仓库并获取最新代码
+      - name: 'Add upstream remote and fetch'
+        run: |
+          git remote add upstream https://github.com/termux/termux-packages.git
+          git fetch upstream
+
+      # 步骤 4: 检查是否存在更新
+      # 我们通过比较本地 source 分支的 HEAD 和上游 master 分支的 HEAD 的 SHA-1 值来判断
+      - name: 'Check for updates'
+        id: check_update
+        run: |
+          # 获取本地 source 分支的当前 commit SHA
+          LOCAL_SHA=$(git rev-parse HEAD)
+          # 获取上游 master 分支的最新 commit SHA
+          UPSTREAM_SHA=$(git rev-parse upstream/master)
+
+          echo "Local HEAD (source): $LOCAL_SHA"
+          echo "Upstream HEAD (master): $UPSTREAM_SHA"
+
+          if [ "$LOCAL_SHA" = "$UPSTREAM_SHA" ]; then
+            echo "Your 'source' branch is already up-to-date with upstream 'master'."
+            echo "has_update=false" >> $GITHUB_OUTPUT
+          else
+            echo "Upstream 'master' has new commits. Will perform a hard reset."
+            echo "has_update=true" >> $GITHUB_OUTPUT
+          fi
+
+      # 步骤 5: 如果有更新，则硬重置分支并强制推送
+      # 这个步骤只有在 check_update 步骤的输出 has_update 为 'true' 时才会运行
+      - name: 'Hard reset and force push'
+        if: steps.check_update.outputs.has_update == 'true'
+        run: |
+          echo "Resetting 'source' branch to 'upstream/master'..."
+          git reset --hard upstream/master
+          echo "Force pushing to origin/source..."
+          git push origin source --force
+
+      # 步骤 6: 如果有更新，则触发 build.yml 工作流
+      # 这个步骤也只有在 check_update 步骤的输出 has_update 为 'true' 时才会运行
+      - name: 'Trigger build workflow'
+        if: steps.check_update.outputs.has_update == 'true'
+        env:
+          # 使用你设置的 PAT，gh cli 需要它来触发工作流
+          GH_TOKEN: ${{ secrets.PAT_TOKEN }}
+        run: |
+          echo "An update was pushed, triggering 'build.yml' workflow on 'automation' branch..."
+          # 使用 GitHub CLI 触发位于 automation 分支上的 build.yml
+          gh workflow run build.yml --ref automation
