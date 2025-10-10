@@ -12,12 +12,8 @@ on:
   # 此处设置为每 6 小时运行一次。您可以根据需要修改。
   # '0 */6 * * *' = 在每6小时的第0分钟运行 (00:00, 06:00, 12:00, 18:00 UTC)
   schedule:
-    # 周一 01:18 北京时间
-    - cron: '18 17 * * 0'
     # 周三 01:27 北京时间
     - cron: '27 17 * * 2'
-    # 周五 01:42 北京时间
-    - cron: '42 17 * * 4'
 
 jobs:
   sync_and_trigger:
@@ -87,4 +83,5 @@ jobs:
           echo "An update was pushed, triggering 'build.yml' workflow on 'automation' branch..."
           # 使用 GitHub CLI 触发位于 automation 分支上的 build.yml
           gh workflow run build.yml --ref automation
+
 
