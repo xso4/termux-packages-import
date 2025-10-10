@@ -69,8 +69,8 @@ jobs:
         working-directory: ./termux-packages
         run: |
           # 开始编译，-a aarch64 指定了目标平台
-          # -i 参数会下载预编译的依赖，大大加快编译速度
-          ./build-package.sh -a aarch64 -i ffmpeg
+          # aarch64 和 ffmpeg 之间增加 -i 参数会下载预编译的依赖，大大加快编译速度
+          ./build-package.sh -a aarch64 ffmpeg
 
       - name: Prepare Release Assets
         id: prep
