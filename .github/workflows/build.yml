@@ -1,120 +1,117 @@
 # .github/workflows/build.yml
 
-name: Build Custom FFmpeg for Termux
+name: Build Termux FFmpeg with fdk-aac
 
 on:
-  # 允许手动从 Actions 标签页触发此工作流程
+  # 允许手动从 GitHub Actions 页面触发此工作流
   workflow_dispatch:
 
-  # 每周自动运行一次
+  # （可选）在每周一的 UTC 时间 02:00 自动运行
   schedule:
-    - cron: '08 17 * * 5'
+    - cron: '0 2 * * 1'
+
+  # （可选）当 automation 分支有新的推送时运行，方便测试工作流本身
+  push:
+    branches:
+      - automation
 
 jobs:
   build:
     runs-on: ubuntu-latest
+    
+    # 授予创建 Release 的权限
+    permissions:
+      contents: write
 
     steps:
-      - name: Checkout termux-packages source branch
-        # 明确检出 source 分支，因为工作流文件本身在 automation 分支
+      - name: Checkout the source branch for building
         uses: actions/checkout@v4
         with:
-          ref: 'source'
+          # 明确指定拉取 source 分支
+          ref: source
+          # 将代码检出到 termux-packages 子目录中
+          path: termux-packages
 
-      - name: Set up Java for Android SDK
-        # Termux 构建脚本需要 Java 环境
-        uses: actions/setup-java@v4
-        with:
-          distribution: 'temurin'
-          java-version: '17'
+      - name: Set up build environment (Ubuntu)
+        working-directory: ./termux-packages
+        run: |
+          sudo apt-get update
+          ./scripts/setup-ubuntu.sh
 
-      - name: Cache Termux build dependencies
-        # 缓存 NDK 和下载的源码包，大幅提升重复构建的速度
+      - name: Cache Android SDK
+        id: cache-sdk
         uses: actions/cache@v4
-        id: termux-cache
         with:
-          path: |
-            ~/.termux-build/_cache/android-ndk-*
-            ~/.termux-build/_cache/src
-          key: ${{ runner.os }}-termux-cache-v2-${{ hashFiles('**/build.sh') }}
-          restore-keys: |
-            ${{ runner.os }}-termux-cache-v2-
+          path: ~/android-sdk
+          key: ${{ runner.os }}-android-sdk-${{ hashFiles('termux-packages/scripts/setup-android-sdk.sh') }}
 
-      - name: Set up Termux build environment
-        # 运行官方的设置脚本来安装所有必要的系统依赖和 Android SDK/NDK
-        env:
-          # 将工作目录设置为 Termux 构建脚本的根目录
-          TERMUX_TOP_DIR: ${{ github.workspace }}
-        run: |
-          echo "Setting up Ubuntu dependencies..."
-          sudo ./scripts/setup-ubuntu.sh
-          echo "Setting up Android SDK..."
-          yes | ./scripts/setup-android-sdk.sh
+      - name: Set up Android SDK
+        # 只有在缓存未命中时才运行安装
+        if: steps.cache-sdk.outputs.cache-hit != 'true'
+        working-directory: ./termux-packages
+        run: ./scripts/setup-android-sdk.sh
 
-      - name: Modify FFmpeg build.sh for fdk-aac
-        # 核心步骤：根据要求修改 ffmpeg 的编译脚本
+      - name: Modify ffmpeg build.sh for fdk-aac
+        working-directory: ./termux-packages
         run: |
-          FFMPEG_BUILD_SH="./packages/ffmpeg/build.sh"
-          echo "--- Original build.sh dependencies ---"
-          grep 'TERMUX_PKG_DEPENDS=' "$FFMPEG_BUILD_SH"
+          FFMPEG_BUILD_SCRIPT="./packages/ffmpeg/build.sh"
+          echo ">>> Modifying ${FFMPEG_BUILD_SCRIPT} to enable libfdk-aac..."
+
+          # 1. 在 TERMUX_PKG_DEPENDS 中添加 libfdk-aac
+          #    使用 sed 在依赖列表的末尾双引号前添加 ", libfdk-aac"
+          #    这假设原字符串以 " 结尾
+          sed -i 's/"$/, libfdk-aac"/' "${FFMPEG_BUILD_SCRIPT}"
+          echo "Added 'libfdk-aac' to TERMUX_PKG_DEPENDS."
+
+          # 2. 将 --disable-libfdk-aac 替换为 --enable-libfdk-aac 和 --enable-nonfree
+          #    根据 termux-packages 的 build.sh 脚本，--disable-libfdk-aac 几乎总是存在
+          sed -i 's/--disable-libfdk-aac/--enable-libfdk-aac --enable-nonfree/' "${FFMPEG_BUILD_SCRIPT}"
+          echo "Replaced '--disable-libfdk-aac' with '--enable-libfdk-aac --enable-nonfree'."
+
+          echo ">>> Patched ffmpeg build script:"
+          grep -C 3 "libfdk-aac" "${FFMPEG_BUILD_SCRIPT}"
+
+      - name: Build ffmpeg package
+        working-directory: ./termux-packages
+        run: |
+          # -a aarch64: 指定目标架构
+          # -i: 从官方源下载并安装预编译的依赖，大大加快CI构建速度
+          ./build-package.sh -a aarch64 -i ffmpeg
+
+      - name: Prepare release assets
+        id: prepare-release
+        run: |
+          # 从 build.sh 中提取版本号
+          VERSION=$(grep 'TERMUX_PKG_VERSION=' termux-packages/packages/ffmpeg/build.sh | cut -d'=' -f2)
+          # 获取当前日期
+          DATE=$(date +%Y%m%d)
+
+          # 设置 Release 的 tag 和 title
+          TAG_NAME="ffmpeg-${VERSION}-${DATE}"
+          RELEASE_TITLE="FFmpeg ${VERSION} (built on ${DATE})"
           
-          # 1. 在 TERMUX_PKG_DEPENDS 末尾添加 libfdk-aac
-          # 使用 sed 找到依赖定义的最后双引号，并在其前插入 ", libfdk-aac"
-          sed -i 's/\(TERMUX_PKG_DEPENDS=".*\)"/\1, libfdk-aac"/' "$FFMPEG_BUILD_SH"
-
-          # 2. 启用 libfdk-aac 和 nonfree 选项
-          # 将 --disable-libfdk-aac 替换为 --enable-libfdk-aac --enable-nonfree
-          # 如果 --disable-libfdk-aac 不存在，则在 configure 参数列表末尾追加。
-          # 这里使用一个更稳健的方法来处理这两种情况。
-          if grep -q -- '--disable-libfdk-aac' "$FFMPEG_BUILD_SH"; then
-            sed -i 's/--disable-libfdk-aac/--enable-libfdk-aac --enable-nonfree/' "$FFMPEG_BUILD_SH"
-          else
-            # 在最后一个续行符 `\` 前插入新行
-            sed -i '/^$/d; $!N; /\\\n\S/!P; D' "$FFMPEG_BUILD_SH" # 确保 configure 参数格式正确
-            sed -i '/\$_EXTRA_CONFIGURE_FLAGS/ a \\t\t--enable-libfdk-aac \\\n\t\t--enable-nonfree' "$FFMPEG_BUILD_SH"
-          fi
-
-          echo "--- Modified build.sh dependencies ---"
-          grep 'TERMUX_PKG_DEPENDS=' "$FFMPEG_BUILD_SH"
-          echo "--- Modified build.sh configure flags ---"
-          grep -E -- '--enable-libfdk-aac|--enable-nonfree' "$FFMPEG_BUILD_SH"
-
-      - name: Build FFmpeg package for aarch64
-        # 运行编译命令，在 aarch64 和 ffmpeg 添加 -i 参数后，脚本会从 Termux 的软件仓库直接下载依赖包的预编译二进制文件，而不是在本地编译这些依赖
-        # 核心修复：设置 TERMUX_TOP_DIR 环境变量，让构建脚本在工作区内创建文件，而不是在系统根目录 /data
-        env:
-          TERMUX_TOP_DIR: ${{ github.workspace }}
-        run: |
-          ./build-package.sh -a aarch64 ffmpeg
-
-      - name: Prepare Release Info
-        # 从 build.sh 提取版本号，并生成发布所需的标题和标签
-        id: release_info
-        run: |
-          FFMPEG_BUILD_SH="./packages/ffmpeg/build.sh"
-          VERSION=$(grep 'TERMUX_PKG_VERSION=' "$FFMPEG_BUILD_SH" | cut -d'=' -f2)
-          REVISION=$(grep 'TERMUX_PKG_REVISION=' "$FFMPEG_BUILD_SH" | cut -d'=' -f2)
-          FULL_VERSION="${VERSION}-${REVISION}"
-          RELEASE_DATE=$(date +%Y.%m.%d)
+          echo "version=${VERSION}" >> $GITHUB_OUTPUT
+          echo "tag=${TAG_NAME}" >> $GITHUB_OUTPUT
+          echo "title=${RELEASE_TITLE}" >> $GITHUB_OUTPUT
           
-          echo "VERSION=${FULL_VERSION}" >> $GITHUB_ENV
-          echo "TAG_NAME=ffmpeg-${FULL_VERSION}-${RELEASE_DATE}" >> $GITHUB_ENV
-          echo "RELEASE_TITLE=FFmpeg ${FULL_VERSION} (${RELEASE_DATE})" >> $GITHUB_ENV
+          # 找出编译好的 .deb 文件
+          DEB_FILE=$(find termux-packages/output -name "ffmpeg_*_aarch64.deb")
+          echo "deb_path=${DEB_FILE}" >> $GITHUB_OUTPUT
+          
+          echo "Release Tag: ${TAG_NAME}"
+          echo "Release Title: ${RELEASE_TITLE}"
+          echo "Artifact Path: ${DEB_FILE}"
 
-      - name: Create GitHub Release and Upload Artifacts
-        # 使用社区的 action 来创建 Release 并上传编译产物
+      - name: Create GitHub Release and Upload Artifact
         uses: softprops/action-gh-release@v2
         with:
-          # 从上一步获取标题和标签
-          name: ${{ env.RELEASE_TITLE }}
-          tag_name: ${{ env.TAG_NAME }}
-          # 附上一些发布说明
+          # 使用上一步生成的 tag 和 title
+          tag_name: ${{ steps.prepare-release.outputs.tag }}
+          name: ${{ steps.prepare-release.outputs.title }}
           body: |
-            Automated FFmpeg build for Termux (aarch64).
-            - **Version**: ${{ env.VERSION }}
-            - **Enabled**: `libfdk-aac` (non-free)
+            Automated FFmpeg build for Termux (aarch64) with libfdk-aac support enabled.
             
-            This release was built automatically using GitHub Actions.
-          # 指定要上传的文件，即编译生成的 .deb 包
-          files: |
-            debs/*.deb
+            - **FFmpeg Version:** `${{ steps.prepare-release.outputs.version }}`
+            - **Source:** Based on `termux/termux-packages` `source` branch.
+          # 指定要上传的文件
+          files: ${{ steps.prepare-release.outputs.deb_path }}
