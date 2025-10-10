@@ -85,9 +85,9 @@ jobs:
           grep -E -- '--enable-libfdk-aac|--enable-nonfree' "$FFMPEG_BUILD_SH"
 
       - name: Build FFmpeg package for aarch64
-        # 运行编译命令，-i 参数可以在出错时进入容器进行调试（在 CI 环境中会直接失败并显示日志）
+        # 运行编译命令，在 aarch64 和 ffmpeg 添加 -i 参数后，脚本会从 Termux 的软件仓库直接下载依赖包的预编译二进制文件，而不是在本地编译这些依赖
         run: |
-          ./build-package.sh -a aarch64 -i ffmpeg
+          ./build-package.sh -a aarch64 ffmpeg
 
       - name: Prepare Release Info
         # 从 build.sh 提取版本号，并生成发布所需的标题和标签
