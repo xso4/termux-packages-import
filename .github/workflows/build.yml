@@ -6,7 +6,7 @@ on:
   # 允许手动从 Actions 标签页触发此工作流程
   workflow_dispatch:
 
-  # 每周一早上 10:00 (UTC+8) 自动运行一次
+  # 每周自动运行一次
   schedule:
     - cron: '08 17 * * 5'
 
@@ -115,4 +115,3 @@ jobs:
           # 指定要上传的文件，即编译生成的 .deb 包
           files: |
             debs/*.deb
-
