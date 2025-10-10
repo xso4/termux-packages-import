@@ -1,0 +1,122 @@
+# .github/workflows/build.yml
+
+name: Build Custom FFmpeg for Termux
+
+on:
+  # 允许手动从 Actions 标签页触发此工作流程
+  workflow_dispatch:
+
+  # 当 source 分支有新的推送时触发
+  push:
+    branches:
+      - source
+
+  # 每周一早上 10:00 (UTC+8) 自动运行一次
+  schedule:
+    - cron: '0 2 * * 1'
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout termux-packages source branch
+        # 明确检出 source 分支，因为工作流文件本身在 automation 分支
+        uses: actions/checkout@v4
+        with:
+          ref: 'source'
+
+      - name: Set up Java for Android SDK
+        # Termux 构建脚本需要 Java 环境
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+
+      - name: Cache Termux build dependencies
+        # 缓存 NDK 和下载的源码包，大幅提升重复构建的速度
+        uses: actions/cache@v4
+        id: termux-cache
+        with:
+          path: |
+            ~/.termux-build/_cache/android-ndk-*
+            ~/.termux-build/_cache/src
+          key: ${{ runner.os }}-termux-cache-v2-${{ hashFiles('**/build.sh') }}
+          restore-keys: |
+            ${{ runner.os }}-termux-cache-v2-
+
+      - name: Set up Termux build environment
+        # 运行官方的设置脚本来安装所有必要的系统依赖和 Android SDK/NDK
+        env:
+          # 将工作目录设置为 Termux 构建脚本的根目录
+          TERMUX_TOP_DIR: ${{ github.workspace }}
+        run: |
+          echo "Setting up Ubuntu dependencies..."
+          sudo ./scripts/setup-ubuntu.sh
+          echo "Setting up Android SDK..."
+          yes | ./scripts/setup-android-sdk.sh
+
+      - name: Modify FFmpeg build.sh for fdk-aac
+        # 核心步骤：根据要求修改 ffmpeg 的编译脚本
+        run: |
+          FFMPEG_BUILD_SH="./packages/ffmpeg/build.sh"
+          echo "--- Original build.sh dependencies ---"
+          grep 'TERMUX_PKG_DEPENDS=' "$FFMPEG_BUILD_SH"
+          
+          # 1. 在 TERMUX_PKG_DEPENDS 末尾添加 libfdk-aac
+          # 使用 sed 找到依赖定义的最后双引号，并在其前插入 ", libfdk-aac"
+          sed -i 's/\(TERMUX_PKG_DEPENDS=".*\)"/\1, libfdk-aac"/' "$FFMPEG_BUILD_SH"
+
+          # 2. 启用 libfdk-aac 和 nonfree 选项
+          # 将 --disable-libfdk-aac 替换为 --enable-libfdk-aac --enable-nonfree
+          # 如果 --disable-libfdk-aac 不存在，则在 configure 参数列表末尾追加。
+          # 这里使用一个更稳健的方法来处理这两种情况。
+          if grep -q -- '--disable-libfdk-aac' "$FFMPEG_BUILD_SH"; then
+            sed -i 's/--disable-libfdk-aac/--enable-libfdk-aac --enable-nonfree/' "$FFMPEG_BUILD_SH"
+          else
+            # 在最后一个续行符 `\` 前插入新行
+            sed -i '/^$/d; $!N; /\\\n\S/!P; D' "$FFMPEG_BUILD_SH" # 确保 configure 参数格式正确
+            sed -i '/\$_EXTRA_CONFIGURE_FLAGS/ a \\t\t--enable-libfdk-aac \\\n\t\t--enable-nonfree' "$FFMPEG_BUILD_SH"
+          fi
+
+          echo "--- Modified build.sh dependencies ---"
+          grep 'TERMUX_PKG_DEPENDS=' "$FFMPEG_BUILD_SH"
+          echo "--- Modified build.sh configure flags ---"
+          grep -E -- '--enable-libfdk-aac|--enable-nonfree' "$FFMPEG_BUILD_SH"
+
+      - name: Build FFmpeg package for aarch64
+        # 运行编译命令，-i 参数可以在出错时进入容器进行调试（在 CI 环境中会直接失败并显示日志）
+        run: |
+          ./build-package.sh -a aarch64 -i ffmpeg
+
+      - name: Prepare Release Info
+        # 从 build.sh 提取版本号，并生成发布所需的标题和标签
+        id: release_info
+        run: |
+          FFMPEG_BUILD_SH="./packages/ffmpeg/build.sh"
+          VERSION=$(grep 'TERMUX_PKG_VERSION=' "$FFMPEG_BUILD_SH" | cut -d'=' -f2)
+          REVISION=$(grep 'TERMUX_PKG_REVISION=' "$FFMPEG_BUILD_SH" | cut -d'=' -f2)
+          FULL_VERSION="${VERSION}-${REVISION}"
+          RELEASE_DATE=$(date +%Y.%m.%d)
+          
+          echo "VERSION=${FULL_VERSION}" >> $GITHUB_ENV
+          echo "TAG_NAME=ffmpeg-${FULL_VERSION}-${RELEASE_DATE}" >> $GITHUB_ENV
+          echo "RELEASE_TITLE=FFmpeg ${FULL_VERSION} (${RELEASE_DATE})" >> $GITHUB_ENV
+
+      - name: Create GitHub Release and Upload Artifacts
+        # 使用社区的 action 来创建 Release 并上传编译产物
+        uses: softprops/action-gh-release@v2
+        with:
+          # 从上一步获取标题和标签
+          name: ${{ env.RELEASE_TITLE }}
+          tag_name: ${{ env.TAG_NAME }}
+          # 附上一些发布说明
+          body: |
+            Automated FFmpeg build for Termux (aarch64).
+            - **Version**: ${{ env.VERSION }}
+            - **Enabled**: `libfdk-aac` (non-free)
+            
+            This release was built automatically using GitHub Actions.
+          # 指定要上传的文件，即编译生成的 .deb 包
+          files: |
+            debs/*.deb
