@@ -69,23 +69,23 @@ jobs:
         working-directory: ./termux-packages
         run: |
           # 开始编译，-a aarch64 指定了目标平台
-          # 可修改，若在 aarch64 和 ffmpeg 之间增加 -i 参数，脚本会从 Termux 的软件仓库直接下载依赖包的预编译二进制文件，而不是在本地编译这些依赖
-          ./build-package.sh -a aarch64 -i ffmpeg
+          # 若在 aarch64 和 ffmpeg 之间增加 -i 参数，脚本会从 Termux 的软件仓库直接下载依赖包的预编译二进制文件，而不是在本地编译这些依赖
+          ./build-package.sh -a -i aarch64 ffmpeg
 
       - name: Prepare Release Assets
         id: prep
         working-directory: ./termux-packages
         run: |
-          # 从 build.sh 中提取版本和修订号
-          VERSION=$(grep 'TERMUX_PKG_VERSION=' packages/ffmpeg/build.sh | cut -d'=' -f2)
-          REVISION=$(grep 'TERMUX_PKG_REVISION=' packages/ffmpeg/build.sh | cut -d'=' -f2)
+          # 从 build.sh 中提取版本和修订号，并去除所有可能的引号
+          VERSION=$(grep 'TERMUX_PKG_VERSION=' packages/ffmpeg/build.sh | cut -d'=' -f2 | sed 's/"//g' | sed "s/'//g")
+          REVISION=$(grep 'TERMUX_PKG_REVISION=' packages/ffmpeg/build.sh | cut -d'=' -f2 | sed 's/"//g' | sed "s/'//g")
           
           # 获取当前日期
           DATE=$(date +%Y.%m.%d)
           
           # 设置 Release 的 Tag 和标题
           TAG_NAME="ffmpeg-v${VERSION}-${REVISION}-${DATE}"
-          RELEASE_TITLE="FFmpeg v${VERSION}-${REVISION} (${DATE})"
+          RELEASE_TITLE="ffmpeg-v${VERSION}-${REVISION}-${DATE}"
           
           echo "Release Tag: ${TAG_NAME}"
           echo "Release Title: ${RELEASE_TITLE}"
@@ -111,10 +111,10 @@ jobs:
           name: ${{ steps.prep.outputs.title }}
           
           # Release 的描述内容
-          body: |
-            Automated build of FFmpeg for Termux (aarch64).
-            - Based on termux/termux-packages `source` branch.
-            - Enabled `libfdk-aac` (non-free).
+          #body: |
+          #  Automated build of FFmpeg for Termux (aarch64).
+          #  - Based on termux/termux-packages `source` branch.
+          #  - Enabled `libfdk-aac` (non-free).
 
           # 要上传的文件列表
           files: |
