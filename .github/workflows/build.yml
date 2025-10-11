@@ -70,7 +70,7 @@ jobs:
         run: |
           # 开始编译，-a aarch64 指定了目标平台
           # 若在 aarch64 和 ffmpeg 之间增加 -i 参数，脚本会从 Termux 的软件仓库直接下载依赖包的预编译二进制文件，而不是在本地编译这些依赖
-          ./build-package.sh -a -i aarch64 ffmpeg
+          ./build-package.sh -a aarch64 -i ffmpeg
 
       - name: Prepare Release Assets
         id: prep
