@@ -75,7 +75,7 @@ jobs:
       # 步骤 6: 如果有更新，则触发 build.yml 工作流
       # 这个步骤也只有在 check_update 步骤的输出 has_update 为 'true' 时才会运行
       - name: 'Trigger build workflow'
-        if: steps.check_update.outputs.has_update == 'true'
+        # if: steps.check_update.outputs.has_update == 'true'
         env:
           # 使用你设置的 PAT，gh cli 需要它来触发工作流
           GH_TOKEN: ${{ secrets.PAT_TOKEN }}
@@ -83,5 +83,6 @@ jobs:
           echo "An update was pushed, triggering 'build.yml' workflow on 'automation' branch..."
           # 使用 GitHub CLI 触发位于 automation 分支上的 build.yml
           gh workflow run build.yml --ref automation
+
 
 
