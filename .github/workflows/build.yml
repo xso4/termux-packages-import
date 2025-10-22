@@ -78,12 +78,14 @@ jobs:
         run: |
           # 从 build.sh 中提取版本和修订号
           VERSION=$(grep 'TERMUX_PKG_VERSION=' packages/ffmpeg/build.sh | cut -d'=' -f2 | sed 's/"//g' | sed "s/'//g")
-          REVISION=$(grep 'TERMUX_PKG_REVISION=' packages/ffmpeg/build.sh | cut -d'=' -f2 | sed 's/"//g' | sed "s/'//g")
+          # REVISION=$(grep 'TERMUX_PKG_REVISION=' packages/ffmpeg/build.sh | cut -d'=' -f2 | sed 's/"//g' | sed "s/'//g")
           DATE=$(date +%Y.%m.%d)
           
           # 设置 Release 的 Tag 和标题
-          TAG_NAME="ffmpeg-v${VERSION}-${REVISION}-${DATE}"
-          RELEASE_TITLE="ffmpeg-v${VERSION}-${REVISION}-${DATE}"
+          # TAG_NAME="ffmpeg-v${VERSION}-${REVISION}-${DATE}"
+          # RELEASE_TITLE="ffmpeg-v${VERSION}-${REVISION}-${DATE}"
+          TAG_NAME="ffmpeg-v${VERSION}-${DATE}"
+          RELEASE_TITLE="ffmpeg-v${VERSION}-${DATE}"
           
           echo "Release Tag: ${TAG_NAME}"
           echo "Release Title: ${RELEASE_TITLE}"
