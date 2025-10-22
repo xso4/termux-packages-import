@@ -72,7 +72,7 @@ jobs:
           # 若在 aarch64 和 ffmpeg 之间增加 -i 参数，脚本会从 Termux 的软件仓库直接下载依赖包的预编译二进制文件，而不是在本地编译这些依赖
           ./build-package.sh -a aarch64 -i ffmpeg
 
-      - name: Prepare Release Assets
+     - name: Prepare Release Assets
         id: prep
         working-directory: ./termux-packages
         run: |
@@ -97,11 +97,16 @@ jobs:
             exit 1
           fi
           
+          # 创建压缩包
+          ZIP_NAME="ffmpeg-v${VERSION}-${REVISION}-${DATE}.zip"
+          zip "${ZIP_NAME}" "${DEB_FILE}"
+          
           # 将变量输出，供后续步骤使用
           echo "tag=${TAG_NAME}" >> $GITHUB_OUTPUT
           echo "title=${RELEASE_TITLE}" >> $GITHUB_OUTPUT
-          echo "deb_path=${DEB_FILE}" >> $GITHUB_OUTPUT
-          echo "deb_name=$(basename "${DEB_FILE}")" >> $GITHUB_OUTPUT
+          echo "zip_path=${ZIP_NAME}" >> $GITHUB_OUTPUT
+          echo "zip_name=${ZIP_NAME}" >> $GITHUB_OUTPUT
+
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
@@ -116,9 +121,9 @@ jobs:
           #  - Based on termux/termux-packages `source` branch.
           #  - Enabled `libfdk-aac` (non-free).
 
-          # 要上传的文件列表
+          # 要上传的文件列表（现在上传压缩包）
           files: |
-            ./termux-packages/${{ steps.prep.outputs.deb_path }}
+            ./termux-packages/${{ steps.prep.outputs.zip_path }}
             
           # 如果找不到文件则失败
           fail_on_unmatched_files: true
