@@ -72,15 +72,13 @@ jobs:
           # 若在 aarch64 和 ffmpeg 之间增加 -i 参数，脚本会从 Termux 的软件仓库直接下载依赖包的预编译二进制文件，而不是在本地编译这些依赖
           ./build-package.sh -a aarch64 -i ffmpeg
 
-     - name: Prepare Release Assets
+      - name: Prepare Release Assets
         id: prep
         working-directory: ./termux-packages
         run: |
-          # 从 build.sh 中提取版本和修订号，并去除所有可能的引号
+          # 从 build.sh 中提取版本和修订号
           VERSION=$(grep 'TERMUX_PKG_VERSION=' packages/ffmpeg/build.sh | cut -d'=' -f2 | sed 's/"//g' | sed "s/'//g")
           REVISION=$(grep 'TERMUX_PKG_REVISION=' packages/ffmpeg/build.sh | cut -d'=' -f2 | sed 's/"//g' | sed "s/'//g")
-          
-          # 获取当前日期
           DATE=$(date +%Y.%m.%d)
           
           # 设置 Release 的 Tag 和标题
@@ -96,17 +94,20 @@ jobs:
             echo "::error::Build failed, FFmpeg .deb file not found."
             exit 1
           fi
+          echo "Found .deb file: ${DEB_FILE}"
+
+          # --- 新增内容：创建压缩包 ---
+          ARCHIVE_NAME="${TAG_NAME}.zip"
+          echo "Creating archive: ${ARCHIVE_NAME}"
+          # 使用 zip 命令进行压缩。-j 选项可以去除目录结构，只把文件本身放进去。
+          zip -j "${ARCHIVE_NAME}" "${DEB_FILE}"
+          # -------------------------
           
-          # 创建压缩包
-          ZIP_NAME="ffmpeg-v${VERSION}-${REVISION}-${DATE}.zip"
-          zip "${ZIP_NAME}" "${DEB_FILE}"
-          
-          # 将变量输出，供后续步骤使用
+          # 将变量输出，供后续步骤使用（注意，现在输出的是压缩包信息）
           echo "tag=${TAG_NAME}" >> $GITHUB_OUTPUT
           echo "title=${RELEASE_TITLE}" >> $GITHUB_OUTPUT
-          echo "zip_path=${ZIP_NAME}" >> $GITHUB_OUTPUT
-          echo "zip_name=${ZIP_NAME}" >> $GITHUB_OUTPUT
-
+          echo "archive_path=${ARCHIVE_NAME}" >> $GITHUB_OUTPUT
+          echo "archive_name=${ARCHIVE_NAME}" >> $GITHUB_OUTPUT
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
@@ -115,15 +116,16 @@ jobs:
           tag_name: ${{ steps.prep.outputs.tag }}
           name: ${{ steps.prep.outputs.title }}
           
-          # Release 的描述内容
-          #body: |
-          #  Automated build of FFmpeg for Termux (aarch64).
-          #  - Based on termux/termux-packages `source` branch.
-          #  - Enabled `libfdk-aac` (non-free).
+          # Release 的描述内容 (可以取消注释)
+          # body: |
+          #   Automated build of FFmpeg for Termux (aarch64).
+          #   - Based on termux/termux-packages `source` branch.
+          #   - Enabled `libfdk-aac` (non-free).
+          #   - The .deb file is packaged in a .zip archive.
 
-          # 要上传的文件列表（现在上传压缩包）
+          # 要上传的文件列表 (指向新的压缩包路径)
           files: |
-            ./termux-packages/${{ steps.prep.outputs.zip_path }}
+            ./termux-packages/${{ steps.prep.outputs.archive_path }}
             
           # 如果找不到文件则失败
           fail_on_unmatched_files: true
